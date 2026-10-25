@@ -1,0 +1,138 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  xray:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: Build xray darwin-arm64
+        run: |
+          set -e
+          git clone --depth 1 -b v26.10.21 https://github.com/XTLS/Xray-core
+          cd Xray-core
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o xray main
+          file xray
+          file xray | grep -q "Mach-O 64-bit executable arm64"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xray
+          path: Xray-core/xray
+
+  app:
+    runs-on: macos-15
+    needs: xray
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: xray
+
+      - name: Patch xray platform + ad-hoc sign
+        run: |
+          mkdir -p Resources/xray
+          cp xray/xray Resources/xray/xray
+          chmod +x Resources/xray/xray
+          set -e
+          if xcrun vtool -set-platform-version ios 15.0 0 -replace Resources/xray/xray 2>/dev/null; then echo vtool-replace-ok
+          elif xcrun vtool -set-platform-version iOS 15.0 0 -replace Resources/xray/xray 2>/dev/null; then echo vtool-replace-ok2
+          else
+            xcrun vtool -set-platform-version ios 15.0 0 -output Resources/xray/xray.new Resources/xray/xray
+            mv Resources/xray/xray.new Resources/xray/xray
+          fi
+          xcrun vtool -show Resources/xray/xray || true
+          codesign --force --sign - Resources/xray/xray
+          file Resources/xray/xray
+
+      - name: Keychain + profile
+        env:
+          P12_B64: ${{ secrets.JIFENG_P12_B64 }}
+          P12_PW: ${{ secrets.JIFENG_P12_PASSWORD }}
+          PROFILE_B64: ${{ secrets.JIFENG_PROFILE_B64 }}
+        run: |
+          set -e
+          echo "$P12_B64" | base64 -d > jifeng.p12
+          PW="$(echo "$P12_PW" | base64 -d)"
+          security create-keychain -p ci-ci ci.keychain
+          security import jifeng.p12 -P "$PW" -k ci.keychain
+          security set-keychain-settings -lut 7200 -u ci.keychain
+          security unlock-keychain -p ci-ci ci.keychain
+          security default-keychain -d user ci.keychain
+          security list-keychains -d user -s ci.keychain /Library/Keychains/System.keychain
+          security find-identity -v -p codesigning ci.keychain
+          rm -f jifeng.p12
+          mkdir -p "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+          echo "$PROFILE_B64" | base64 -d > "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/fdcaba8d-57d0-46d2-8b5c-3f7e40b341dc30.mobileprovision"
+
+      - name: Generate project
+        run: |
+          set -e
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Archive
+        run: |
+          set -eo pipefail
+          xcodebuild -project Jifeng.xcodeproj -scheme Jifeng -configuration Release \
+            -destination "generic/platform=iOS" \
+            CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM=9FTBM39AHP \
+            PROVISIONING_PROFILE_SPECIFIER=fdcaba8d-57d0-46d2-8b5c-3f7e40b341dc30 \
+            CODE_SIGN_IDENTITY="iPhone Distribution: ruixian chen (9FTBM39AHP)" \
+            -archivePath Jifeng.xcarchive archive 2>&1 | tail -60
+
+      - name: Export IPA
+        run: |
+          set -eo pipefail
+          xcodebuild -exportArchive -archivePath Jifeng.xcarchive -exportOptionsPlist dts/export.plist 2>&1 | tail -30
+          ls -lh Jifeng.ipa
+
+      - name: Guard checks
+        run: |
+          set -e
+          python3 - "$PWD/Jifeng.ipa" <<'PY'
+          import sys, zipfile, plistlib
+          z = zipfile.ZipFile(sys.argv[1])
+          names = z.namelist()
+          appexe = [n for n in names if n.endswith("Jifeng.app/Jifeng")]
+          appex = [n for n in names if n.endswith("Jifeng.appex/JifengTunnel")]
+          xray = [n for n in names if n.endswith("Jifeng.appex/xray")]
+          print("appexe:", appexe[:1])
+          print("appex:", appex[:1])
+          print("xray:", xray[:1])
+          assert appexe and appex and xray, "missing bundle pieces"
+          app = z.read(appexe[0])
+          cn = app.count("疾风加速".encode("utf-8"))
+          print("feature-string count:", cn)
+          assert cn > 0, "missing 疾风加速 in app binary"
+          blob = z.read(xray[0])
+          print("xray magic:", blob[:4].hex())
+          assert blob[:4] in (b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf",
+                              b"\xc2\x75\x3c\x62", b"\x62\x3c\x75\x62"), "xray not mach-o"
+          info = plistlib.loads(z.read("Payload/Jifeng.app/Info.plist"))
+          print("version:", info.get("CFBundleShortVersionString"),
+                "build:", info.get("CFBundleVersion"),
+                "bid:", info.get("CFBundleIdentifier"))
+          print("GUARD OK")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Jifeng.ipa
+          path: Jifeng.ipa
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0
+          name: 疾风 v1.0.0 (AdHoc)
+          files: Jifeng.ipa
+          make_latest: true
+          fail_on_error: false

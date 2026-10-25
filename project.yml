@@ -1,0 +1,70 @@
+name: Jifeng
+options:
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "20261025.01"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    SWIFT_OPTIMIZATION_LEVEL: -O
+targets:
+  Jifeng:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/App
+      - path: Sources/Shared
+      - path: Resources/Assets.xcassets
+    entitlements:
+      path: dts/app.entitlements
+      properties:
+        com.apple.developer.networking.networkextension:
+          - packet-tunnel-provider
+        get-task-allow: true
+    info:
+      path: Sources/App/Info.plist
+      properties:
+        CFBundleDisplayName: 疾风
+        CFBundleIdentifier: app.jujube1760.cassava8287
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        ITSAppUsesNonExemptEncryption: false
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSLocalNetworkUsage: 疾风需要本地网络权限以测量节点连通性
+    dependencies:
+      - target: JifengTunnel
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.jujube1760.cassava8287
+        PRODUCT_NAME: Jifeng
+        CODE_SIGN_STYLE: Manual
+  JifengTunnel:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Sources/Tunnel
+      - path: Sources/Shared
+      - path: Resources/xray
+        type: resource
+        buildPhase: resources
+    entitlements:
+      path: dts/tunnel.entitlements
+      properties:
+        com.apple.developer.networking.networkextension:
+          - packet-tunnel-provider
+    info:
+      path: Sources/Tunnel/Info.plist
+      properties:
+        CFBundleIdentifier: app.jujube1760.cassava8287.JifengTunnel
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
+          NSExtensionPrincipalClass: JifengTunnel.JifengTunnel
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.jujube1760.cassava8287.JifengTunnel
+        PRODUCT_NAME: JifengTunnel
+        CODE_SIGN_STYLE: Manual
