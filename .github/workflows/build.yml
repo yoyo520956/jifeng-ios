@@ -35,11 +35,12 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: xray
+          path: xray-dl
 
       - name: Patch xray platform + ad-hoc sign
         run: |
           mkdir -p Resources/xray
-          cp xray/xray Resources/xray/xray
+          cp xray-dl/xray Resources/xray/xray
           chmod +x Resources/xray/xray
           set -e
           if xcrun vtool -set-platform-version ios 15.0 0 -replace Resources/xray/xray 2>/dev/null; then echo vtool-replace-ok
