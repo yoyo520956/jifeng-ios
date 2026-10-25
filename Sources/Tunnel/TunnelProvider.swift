@@ -95,7 +95,7 @@ final class JifengTunnel: NEPacketTunnelProvider {
         var buf = [UInt8](repeating: 0, count: cap)
         let n = buf.withUnsafeMutableBytes { ptr -> Int in
             guard let base = ptr.baseAddress else { return 0 }
-            return recv(udpFD, base, UInt32(cap), 0)
+            return recv(udpFD, base, Int(cap), 0)
         }
         if n > 0 {
             completion(Data(bytes: buf, count: n), nil)
@@ -142,8 +142,8 @@ final class JifengTunnel: NEPacketTunnelProvider {
         var actions = posix_spawn_file_actions_t()
         posix_spawn_file_actions_init(&actions)
         if logFD >= 0 {
-            posix_spawn_file_actions_adddup2(&actions, logFD, STDOUT_FILENO)
-            posix_spawn_file_actions_adddup2(&actions, logFD, STDERR_FILENO)
+            posix_spawn_file_actions_adddup2(&actions, Int32(logFD), 1)
+            posix_spawn_file_actions_adddup2(&actions, Int32(logFD), 2)
         }
         let c0 = strdup(bin.path), c1 = strdup("run"), c2 = strdup("-config"), c3 = strdup(config)
         var argv: [UnsafeMutablePointer<CChar>?] = [c0, c1, c2, c3, nil]
