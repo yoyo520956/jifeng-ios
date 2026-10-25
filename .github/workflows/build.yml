@@ -61,13 +61,19 @@ jobs:
         run: |
           set -e
           echo "$P12_B64" | base64 -d > jifeng.p12
-          PW="$(echo "$P12_PW" | base64 -d)"
+          # 兼容 secret 存的是 base64 或明文两种情况
+          PW1="$(printf '%s' "$P12_PW" | base64 -d 2>/dev/null || true)"
+          [ -z "$PW1" ] && PW1="$P12_PW"
+          [ -z "$PW1" ] && PW1="1"
           security create-keychain -p ci-ci ci.keychain
-          security import jifeng.p12 -P "$PW" -k ci.keychain
-          security set-keychain-settings -lut 7200 -u ci.keychain
           security unlock-keychain -p ci-ci ci.keychain
+          security set-keychain-settings -lut 7200 -u ci.keychain
           security default-keychain -d user ci.keychain
           security list-keychains -d user -s ci.keychain /Library/Keychains/System.keychain
+          if ! security import jifeng.p12 -k ci.keychain -P "$PW1" -T /usr/bin/codesign 2>/dev/null; then
+            echo "retry import with fallback pw"
+            security import jifeng.p12 -k ci.keychain -P "1" -T /usr/bin/codesign
+          fi
           security find-identity -v -p codesigning ci.keychain
           rm -f jifeng.p12
           mkdir -p "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
