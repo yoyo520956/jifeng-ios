@@ -16,11 +16,9 @@ public enum LatencyProbe {
         defer { close(fd) }
         fcntl(fd, F_SETFL, O_NONBLOCK)
         guard connect(fd, r.pointee.ai_addr, r.pointee.ai_addrlen) == 0 || errno == EINPROGRESS else { return nil }
-        var tv = timeval(tv_sec: Int(timeout), tv_usec: 0)
-        var wfds = fdset()   // 全零 = 无 fd
-        if fd < 32 { wfds.fds_bits.0 = Int32(1 << fd) }
-        let rc = select(fd + 1, nil, &wfds, nil, &tv)
-        guard rc >= 1 else { return nil }
+        var pfd = pollfd(fd: fd, events: Int16(POLL_WRNORM), revents: 0)
+        let prc = poll(&pfd, 1, Int32(timeout * 1000))
+        guard prc >= 1, (pfd.revents & Int16(POLL_WRNORM)) != 0 else { return nil }
         var err: Int32 = 0
         var elen = socklen_t(MemoryLayout<Int32>.size)
         getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &elen)

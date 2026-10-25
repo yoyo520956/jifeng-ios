@@ -20,7 +20,6 @@ enum JifengError: LocalizedError {
 /// NEPacketTunnelProvider：桥接 xray loopback(127.0.0.1:55555) 与系统隧道
 /// 协议：每个 UDP datagram = 一个 IP 包（xray loopback inbound）
 final class JifengTunnel: NEPacketTunnelProvider {
-    private var xrayProcess: Process?
     private var udpFD: Int32 = -1
     private var tmpFiles: [URL] = []
 
@@ -44,22 +43,21 @@ final class JifengTunnel: NEPacketTunnelProvider {
 
     // MARK: - 停止
     override func stopTunnel(reason: NEProviderStopReason, completion: @escaping (Error?) -> Void) {
-        if let p = xrayProcess {
-            p.terminate()
-            let deadline = Date().addingTimeInterval(3)
-            while p.isRunning && Date() < deadline {
-                Thread.sleep(forTimeInterval: 0.1)
-            }
-            if p.isRunning { kill(p.processIdentifier, SIGKILL) }
+        if xrayPID > 0 {
+            kill(xrayPID, SIGTERM)
+            Thread.sleep(forTimeInterval: 0.5)
+            kill(xrayPID, SIGKILL)
+            var st: Int32 = 0
+            waitpid(xrayPID, &st, 0)
         }
-        xrayProcess = nil
+        xrayPID = 0
         if udpFD >= 0 {
             close(udpFD)
             udpFD = -1
         }
         for f in tmpFiles { try? FileManager.default.removeItem(at: f) }
         tmpFiles.removeAll()
-        self.completion(nil)
+        completion(nil)
     }
 
     // MARK: - 数据桥
@@ -97,7 +95,7 @@ final class JifengTunnel: NEPacketTunnelProvider {
         var buf = [UInt8](repeating: 0, count: cap)
         let n = buf.withUnsafeMutableBytes { ptr -> Int in
             guard let base = ptr.baseAddress else { return 0 }
-            return recvp(udpFD, base, UInt32(cap), 0, nil, nil)
+            return recv(udpFD, base, UInt32(cap), 0)
         }
         if n > 0 {
             completion(Data(bytes: buf, count: n), nil)
@@ -119,44 +117,59 @@ final class JifengTunnel: NEPacketTunnelProvider {
         tmpFiles = [cfgURL, logURL]
 
         guard let bin = locateXray() else { throw JifengError.binaryNotFound }
-        let proc = Process()
-        proc.executableURL = bin
-        proc.arguments = ["run", "-config", cfgURL.path]
-        if let fh = FileHandle(forWritingAtPath: logURL.path) {
-            proc.standardOutput = fh
-            proc.standardError = fh
-        }
-        try proc.run()
+        let spawn = spawnXray(bin: bin, config: cfgURL.path, log: logURL.path)
+        guard let pid = spawn else { throw JifengError.xrayNotReady }
 
-        // 轮询 ≤5s：进程活着 + loopback 端口能发出
+        // 轮询 ≤5s：进程活着 + loopback 端口可连
         var ok = false
         for _ in 0..<20 {
             Thread.sleep(forTimeInterval: 0.25)
-            if !proc.isRunning { break }
             if udpReachable() { ok = true; break }
         }
-        guard ok, proc.isRunning else {
-            proc.terminate()
+        guard ok else {
+            kill(pid, SIGKILL)
             throw JifengError.xrayNotReady
         }
-        xrayProcess = proc
+        xrayPID = pid
         udpFD = makeUDPSocket()
+    }
+
+    private var xrayPID: pid_t = 0
+
+    /// iOS 无 Process/NSTask，用 posix_spawn 拉起 xray
+    private func spawnXray(bin: URL, config: String, log: String) -> pid_t? {
+        let logFD = open(log, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+        var actions = posix_spawn_file_actions_t()
+        posix_spawn_file_actions_init(&actions)
+        if logFD >= 0 {
+            posix_spawn_file_actions_adddup2(&actions, logFD, STDOUT_FILENO)
+            posix_spawn_file_actions_adddup2(&actions, logFD, STDERR_FILENO)
+        }
+        let c0 = strdup(bin.path), c1 = strdup("run"), c2 = strdup("-config"), c3 = strdup(config)
+        var argv: [UnsafeMutablePointer<CChar>?] = [c0, c1, c2, c3, nil]
+        var env: [UnsafeMutablePointer<CChar>?] = [nil]
+        var pid: pid_t = 0
+        let rc = posix_spawn(&pid, bin.path, &actions, nil, &argv, &env)
+        free(c0); free(c1); free(c2); free(c3)
+        posix_spawn_file_actions_destroy(&actions)
+        if logFD >= 0 { close(logFD) }
+        return rc == 0 ? pid : nil
     }
 
     private func locateXray() -> URL? {
         let bundle = Bundle(for: type(of: self))
         let fm = FileManager.default
-        if let u = bundle.bundleURL.appendingPathComponent("xray"),
-           fm.isExecutableFile(atPath: u.path) {
-            return u
+        let u0 = bundle.bundleURL.appendingPathComponent("xray")
+        if fm.isExecutableFile(atPath: u0.path) {
+            return u0
         }
         if let u = bundle.resourceURL?.appendingPathComponent("xray"),
            fm.isExecutableFile(atPath: u.path) {
             return u
         }
-        if let u = Bundle.main.bundleURL.appendingPathComponent("PlugIns/Jifeng.appex/xray"),
-           fm.isExecutableFile(atPath: u.path) {
-            return u
+        let u2 = Bundle.main.bundleURL.appendingPathComponent("PlugIns/Jifeng.appex/xray")
+        if fm.isExecutableFile(atPath: u2.path) {
+            return u2
         }
         return nil
     }
