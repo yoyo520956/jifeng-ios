@@ -144,7 +144,9 @@ final class JifengTunnel: NEPacketTunnelProvider {
     }
 
     private func spawnXray(bin: URL, config: String, log: String) -> pid_t? {
-        let logFD = log.withCString { open($0, O_WRONLY | O_CREAT | O_APPEND, mode_t(0o644)) }
+        var cpath = [CChar](repeating: 0, count: Int(PATH_MAX))
+        _ = log.getCString(&cpath, maxLength: Int(PATH_MAX))
+        let logFD = open(&cpath, O_WRONLY | O_CREAT | O_APPEND, mode_t(0o644))
         var actions = posix_spawn_file_actions_t()
         posix_spawn_file_actions_init(&actions)
         if logFD >= 0 {

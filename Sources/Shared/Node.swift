@@ -151,7 +151,7 @@ public enum NodeParser {
                 port = Int(String(hostPort[hostPort.index(after: c)...])) ?? 8388
             }
             return ProxyNode(name: name, proto: "shadowsocks", host: host, port: port,
-                             cipher: method, password: cred)
+                             password: cred, cipher: method)
         }
         // 未 base64 的 method:password 直写
         if let i = cred.firstIndex(of: ":") {
@@ -165,7 +165,7 @@ public enum NodeParser {
                 port = Int(String(hostPort[hostPort.index(after: c)...])) ?? 8388
             }
             return ProxyNode(name: name, proto: "shadowsocks", host: host, port: port,
-                             cipher: method, password: cred)
+                             password: cred, cipher: method)
         }
         return nil
     }
