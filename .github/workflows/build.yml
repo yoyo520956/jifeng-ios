@@ -68,8 +68,8 @@ jobs:
           security create-keychain -p ci-ci ci.keychain
           security unlock-keychain -p ci-ci ci.keychain
           security set-keychain-settings -lut 7200 -u ci.keychain
-          security default-keychain -d user ci.keychain
-          security list-keychains -d user -s ci.keychain /Library/Keychains/System.keychain
+          security default-keychain -s ci.keychain
+          security list-keychains -d user -s ci.keychain login.keychain /Library/Keychains/System.keychain
           if ! security import jifeng.p12 -k ci.keychain -P "$PW1" -T /usr/bin/codesign 2>/dev/null; then
             echo "retry import with fallback pw"
             security import jifeng.p12 -k ci.keychain -P "1" -T /usr/bin/codesign
