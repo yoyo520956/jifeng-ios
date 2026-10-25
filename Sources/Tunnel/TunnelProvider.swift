@@ -5,25 +5,23 @@ enum JifengError: LocalizedError {
     case binaryNotFound
     case xrayNotReady
     case socketFail
-    case recvFail
 
     var errorDescription: String? {
         switch self {
         case .binaryNotFound: return "找不到 xray 引擎"
         case .xrayNotReady: return "xray 启动失败"
         case .socketFail: return "隧道套接字错误"
-        case .recvFail: return "读取隧道数据失败"
         }
     }
 }
 
-/// NEPacketTunnelProvider：桥接 xray loopback(127.0.0.1:55555) 与系统隧道
-/// 协议：每个 UDP datagram = 一个 IP 包（xray loopback inbound）
+/// NEPacketTunnelProvider：xray loopback(127.0.0.1:55555, UDP datagram=IP packet) 与系统隧道桥
 final class JifengTunnel: NEPacketTunnelProvider {
+    private var xrayPID: pid_t = 0
     private var udpFD: Int32 = -1
     private var tmpFiles: [URL] = []
 
-    // MARK: - 启动（legacy completion 版签名，iOS 14+）
+    // MARK: - 启动
     override func startTunnel(options: [String: NSObject]?, completion: @escaping (Error?) -> Void) {
         guard let nodeJSON = options?["node"] as? String,
               let node = NodeCodex.decode(nodeJSON)
@@ -38,6 +36,32 @@ final class JifengTunnel: NEPacketTunnelProvider {
             return
         }
         completion(nil)
+    }
+
+    // MARK: - 引擎装配（配置 → 拉起 xray → UDP 桥就绪）
+    private func setupXray(node: ProxyNode) throws {
+        let cfg = XrayConfig.json(for: node)
+        let tmp = FileManager.default.temporaryDirectory
+        let cfgURL = tmp.appendingPathComponent("jifeng_xray.json")
+        let logURL = tmp.appendingPathComponent("jifeng_xray.log")
+        try cfg.write(to: cfgURL, atomically: true, encoding: .utf8)
+        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        tmpFiles = [cfgURL, logURL]
+        guard let bin = locateXray() else { throw JifengError.binaryNotFound }
+        guard let pid = spawnXray(bin: bin, config: cfgURL.path, log: logURL.path) else {
+            throw JifengError.xrayNotReady
+        }
+        var ok = false
+        for _ in 0..<20 {
+            Thread.sleep(forTimeInterval: 0.25)
+            if udpReachable() { ok = true; break }
+        }
+        if !ok {
+            kill(pid, SIGKILL)
+            throw JifengError.xrayNotReady
+        }
+        xrayPID = pid
+        udpFD = makeUDPSocket()
     }
 
     // MARK: - 停止
@@ -59,9 +83,9 @@ final class JifengTunnel: NEPacketTunnelProvider {
         completion(nil)
     }
 
-    // MARK: - 数据桥
-    override func writeTunnelData(_ packet: NEPacketTunnelProvider.TunnelPacket) async throws {
-        let data = packet.content
+    // MARK: - 数据桥（async 签名，iOS 17+ SDK）
+    override func writeTunnelData(_ packetData: Data) async throws {
+        let data = packetData
         guard udpFD >= 0 else { throw JifengError.socketFail }
         var sent = 0
         var retry = 0
@@ -85,57 +109,19 @@ final class JifengTunnel: NEPacketTunnelProvider {
         }
     }
 
-    override func readTunnelData(_ count: Int, completion: @escaping (Data?, Error?) -> Void) {
-        guard udpFD >= 0 else {
-            completion(nil, JifengError.socketFail)
-            return
-        }
-        let cap = max(count, 16)
+    override func readTunnelData(_ count: Int) async throws -> Data {
+        guard udpFD >= 0 else { throw JifengError.socketFail }
+        let cap = max(count, 1500)
         var buf = [UInt8](repeating: 0, count: cap)
         let n = buf.withUnsafeMutableBytes { ptr -> Int in
             guard let base = ptr.baseAddress else { return 0 }
             return recv(udpFD, base, Int(cap), 0)
         }
-        if n > 0 {
-            completion(Data(bytes: buf, count: n), nil)
-        } else if errno == EAGAIN || errno == EWOULDBLOCK {
-            completion(nil, nil)
-        } else {
-            completion(nil, JifengError.recvFail)
-        }
+        if n > 0 { return Data(bytes: buf, count: n) }
+        return Data()
     }
 
     // MARK: - xray 引擎
-    private func setupXray(node: ProxyNode) throws {
-        let cfg = XrayConfig.json(for: node)
-        let tmp = FileManager.default.temporaryDirectory
-        let cfgURL = tmp.appendingPathComponent("jifeng_xray.json")
-        let logURL = tmp.appendingPathComponent("jifeng_xray.log")
-        try cfg.write(to: cfgURL, atomically: true, encoding: .utf8)
-        FileManager.default.createFile(atPath: logURL.path, contents: nil)
-        tmpFiles = [cfgURL, logURL]
-
-        guard let bin = locateXray() else { throw JifengError.binaryNotFound }
-        let spawn = spawnXray(bin: bin, config: cfgURL.path, log: logURL.path)
-        guard let pid = spawn else { throw JifengError.xrayNotReady }
-
-        // 轮询 ≤5s：进程活着 + loopback 端口可连
-        var ok = false
-        for _ in 0..<20 {
-            Thread.sleep(forTimeInterval: 0.25)
-            if udpReachable() { ok = true; break }
-        }
-        guard ok else {
-            kill(pid, SIGKILL)
-            throw JifengError.xrayNotReady
-        }
-        xrayPID = pid
-        udpFD = makeUDPSocket()
-    }
-
-    private var xrayPID: pid_t = 0
-
-    /// iOS 无 Process/NSTask，用 posix_spawn 拉起 xray
     private func spawnXray(bin: URL, config: String, log: String) -> pid_t? {
         let logFD = log.withCString { open($0, O_WRONLY | O_CREAT | O_APPEND, mode_t(0o644)) }
         var actions = posix_spawn_file_actions_t()
@@ -148,29 +134,13 @@ final class JifengTunnel: NEPacketTunnelProvider {
         var argv: [UnsafeMutablePointer<CChar>?] = [c0, c1, c2, c3, nil]
         var env: [UnsafeMutablePointer<CChar>?] = [nil]
         var pid: pid_t = 0
-        let rc = posix_spawn(&pid, bin.path, &actions, nil, &argv, &env)
+        let rc = bin.path.withCString { cpath in
+            posix_spawn(&pid, cpath, &actions, nil, &argv, &env)
+        }
         free(c0); free(c1); free(c2); free(c3)
         posix_spawn_file_actions_destroy(&actions)
         if logFD >= 0 { close(logFD) }
         return rc == 0 ? pid : nil
-    }
-
-    private func locateXray() -> URL? {
-        let bundle = Bundle(for: type(of: self))
-        let fm = FileManager.default
-        let u0 = bundle.bundleURL.appendingPathComponent("xray")
-        if fm.isExecutableFile(atPath: u0.path) {
-            return u0
-        }
-        if let u = bundle.resourceURL?.appendingPathComponent("xray"),
-           fm.isExecutableFile(atPath: u.path) {
-            return u
-        }
-        let u2 = Bundle.main.bundleURL.appendingPathComponent("PlugIns/Jifeng.appex/xray")
-        if fm.isExecutableFile(atPath: u2.path) {
-            return u2
-        }
-        return nil
     }
 
     private func makeUDPSocket() -> Int32 {
@@ -178,6 +148,8 @@ final class JifengTunnel: NEPacketTunnelProvider {
         guard fd >= 0 else { return -1 }
         var tv = timeval(tv_sec: 2, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        var rtv = timeval(tv_sec: 1, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rtv, socklen_t(MemoryLayout<timeval>.size))
         fcntl(fd, F_SETFL, O_NONBLOCK)
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
@@ -213,5 +185,23 @@ final class JifengTunnel: NEPacketTunnelProvider {
             }
         }
         return ret == 0
+    }
+
+    private func locateXray() -> URL? {
+        let bundle = Bundle(for: type(of: self))
+        let fm = FileManager.default
+        let u0 = bundle.bundleURL.appendingPathComponent("xray")
+        if fm.isExecutableFile(atPath: u0.path) {
+            return u0
+        }
+        if let u = bundle.resourceURL?.appendingPathComponent("xray"),
+           fm.isExecutableFile(atPath: u.path) {
+            return u
+        }
+        let u2 = Bundle.main.bundleURL.appendingPathComponent("PlugIns/Jifeng.appex/xray")
+        if fm.isExecutableFile(atPath: u2.path) {
+            return u2
+        }
+        return nil
     }
 }
