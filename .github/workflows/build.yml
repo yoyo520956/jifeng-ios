@@ -61,23 +61,26 @@ jobs:
         run: |
           set -e
           echo "$P12_B64" | base64 -d > jifeng.p12
-          # 兼容 secret 存的是 base64 或明文两种情况
+          HOMEDIR="$HOME"
+          echo "p12 size: $(stat -f%z jifeng.p12)"
           PW1="$(printf '%s' "$P12_PW" | base64 -d 2>/dev/null || true)"
-          [ -z "$PW1" ] && PW1="$P12_PW"
-          [ -z "$PW1" ] && PW1="1"
-          security create-keychain -p ci-ci ci.keychain
-          security unlock-keychain -p ci-ci ci.keychain
-          security set-keychain-settings -lut 7200 -u ci.keychain
-          security default-keychain -s ci.keychain
-          security list-keychains -d user -s ci.keychain login.keychain /Library/Keychains/System.keychain
-          if ! security import jifeng.p12 -k ci.keychain -P "$PW1" -T /usr/bin/codesign 2>/dev/null; then
-            echo "retry import with fallback pw"
-            security import jifeng.p12 -k ci.keychain -P "1" -T /usr/bin/codesign
-          fi
-          security find-identity -v -p codesigning ci.keychain
+          echo "pw candidates: decoded-len=${#PW1} raw-len=${#P12_PW}"
+          OK=0
+          for PW in "$PW1" "$P12_PW" "1"; do
+            [ -z "$PW" ] && continue
+            if security import jifeng.p12 -k "$HOMEDIR/Library/Keychains/login.keychain-db" -P "$PW" -T /usr/bin/codesign 2>&1; then
+              echo "IMPORT OK with pw len ${#PW}"; OK=1; break
+            else
+              echo "import failed with pw len ${#PW}, trying next"
+            fi
+          done
+          [ "$OK" = "1" ] || { echo "all p12 imports failed"; exit 1; }
+          security list-keychains -s "$HOMEDIR/Library/Keychains/login.keychain-db"
+          security find-identity -v -p codesigning
           rm -f jifeng.p12
-          mkdir -p "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
-          echo "$PROFILE_B64" | base64 -d > "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/fdcaba8d-57d0-46d2-8b5c-3f7e40b341dc30.mobileprovision"
+          mkdir -p "$HOMEDIR/Library/Developer/Xcode/UserData/Provisioning Profiles"
+          echo "$PROFILE_B64" | base64 -d > "$HOMEDIR/Library/Developer/Xcode/UserData/Provisioning Profiles/fdcaba8d-57d0-46d2-8b5c-3f7e40b341dc30.mobileprovision"
+          ls -la "$HOMEDIR/Library/Developer/Xcode/UserData/Provisioning Profiles/"
 
       - name: Generate project
         run: |
