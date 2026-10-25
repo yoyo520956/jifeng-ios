@@ -40,12 +40,22 @@ final class AppState: ObservableObject {
         return nodes.first
     }
 
-    // MARK: - 状态监视（每 1.5s 轮询；若 CI 报 "only available via await" 则改 await manager.connection）
+    // MARK: - 状态监视（iOS 17+ manager.connection 是 async；轮询兜底）
     private func startMonitor() {
+        guard #available(iOS 17.0, *) else {
+            monitorTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    guard let self else { return }
+                    self.apply(self.manager.connection.state)
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                }
+            }
+            return
+        }
         monitorTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                let st = self.manager.connection.state
+                let st = await self.manager.connection.state
                 self.apply(st)
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
             }
