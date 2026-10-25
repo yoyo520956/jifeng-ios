@@ -86,21 +86,39 @@ jobs:
           brew install xcodegen
           xcodegen generate
 
-      - name: Archive
+      - name: Build unsigned
         run: |
           set -eo pipefail
           xcodebuild -project Jifeng.xcodeproj -scheme Jifeng -configuration Release \
-            -destination "generic/platform=iOS" \
-            CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM=9FTBM39AHP \
-            PROVISIONING_PROFILE_SPECIFIER=fdcaba8d-57d0-46d2-8b5c-3f7e40b341dc30 \
-            CODE_SIGN_IDENTITY="iPhone Distribution: ruixian chen (9FTBM39AHP)" \
-            -archivePath Jifeng.xcarchive archive 2>&1 | tail -60
+            -destination "generic/platform=iOS" -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGN_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tail -40
 
-      - name: Export IPA
+      - name: AdHoc sign + package IPA
         run: |
           set -eo pipefail
-          xcodebuild -exportArchive -archivePath Jifeng.xcarchive -exportOptionsPlist dts/export.plist 2>&1 | tail -30
+          PD="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/fdcaba8d-57d0-46d2-8b5c-3f7e40b341dc30.mobileprovision"
+          D=build/Build/Products/Release-iphoneos
+          APP="$D/Jifeng.app"
+          [ -d "$APP" ] || { echo "APP MISSING"; ls "$D" || true; exit 1; }
+          mkdir -p "$APP/PlugIns"
+          APPEX="$APP/PlugIns/JifengTunnel.appex"
+          if [ ! -d "$APPEX" ]; then
+            [ -d "$D/JifengTunnel.appex" ] && cp -R "$D/JifengTunnel.appex" "$APP/PlugIns/" || { echo "APPEX MISSING"; exit 1; }
+          fi
+          cp "$PD" "$APP/embedded.mobileprovision"
+          cp "$PD" "$APPEX/embedded.mobileprovision"
+          [ -f "$APPEX/xray" ] && codesign --force --sign - "$APPEX/xray"
+          IDENT=$(security find-identity -v -p codesigning | sed -n 's/.*"\(.*\)"/\1/p' | grep "iPhone Distribution" | head -1)
+          echo "identity: $IDENT"
+          codesign --force --timestamp=none --sign "$IDENT" --entitlements dts/tunnel.entitlements "$APPEX"
+          codesign --force --timestamp=none --sign "$IDENT" --entitlements dts/app.entitlements "$APP"
+          if ! codesign --verify "$APP" > /tmp/verify.log 2>&1; then echo "VERIFY FAIL"; tail -8 /tmp/verify.log; exit 1; fi
+          echo "verify OK"
+          rm -rf Payload && mkdir -p Payload && cp -R "$APP" Payload/
+          zip -qry Jifeng.ipa Payload
           ls -lh Jifeng.ipa
+          unzip -l Jifeng.ipa | grep -E "Jifeng.app/Jifeng$|appex|xray|Info.plist" | head -8
 
       - name: Guard checks
         run: |
