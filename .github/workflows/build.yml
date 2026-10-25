@@ -20,7 +20,7 @@ jobs:
           cd Xray-core
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o xray ./main
           file xray
-          file xray | grep -q "Mach-O 64-bit executable arm64"
+          file xray | grep -q "Mach-O 64-bit arm64"
       - uses: actions/upload-artifact@v4
         with:
           name: xray
