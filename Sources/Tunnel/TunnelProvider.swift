@@ -44,7 +44,7 @@ final class JifengTunnel: NEPacketTunnelProvider {
         let v4 = NEIPv4Settings(addresses: ["198.18.0.1"], subnetMasks: ["255.255.255.0"])
         v4.includedRoutes = [s4]
         v4.excludedRoutes = []
-        settings.iPv4Settings = v4
+        settings.ipv4Settings = v4
         let dns = NEDNSSettings(servers: ["8.8.8.8", "1.1.1.1"])
         settings.dnsSettings = dns
         setTunnelNetworkSettings(settings) { err in
@@ -155,9 +155,8 @@ final class JifengTunnel: NEPacketTunnelProvider {
         var argv: [UnsafeMutablePointer<CChar>?] = [c0, c1, c2, c3, nil]
         var env: [UnsafeMutablePointer<CChar>?] = [nil]
         var pid: pid_t = 0
-        let rc = bin.path.withCString { cpath in
-            posix_spawn(&pid, cpath, &actions, nil, &argv, &env)
-        }
+        let cpath = bin.path.withCString { String(cString: $0) }
+        let rc = posix_spawn(&pid, cpath, &actions, nil, &argv, &env)
         free(c0); free(c1); free(c2); free(c3)
         posix_spawn_file_actions_destroy(&actions)
         if logFD >= 0 { close(logFD) }
