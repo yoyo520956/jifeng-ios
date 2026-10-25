@@ -1,21 +1,31 @@
 import Foundation
-import Network
+import Darwin
 
-/// TCP 握手测延迟（主 App 直连节点 host:port，不经过隧道）
+/// TCP 握手测延迟（主 App 直连节点 host:port，不经过隧道；纯 POSIX）
 public enum LatencyProbe {
-    public static func latency(to host: String, port: Int, timeout: Double = 4) async -> Double? {
-        guard let p = NWEndpoint.Port(rawValue: UInt16(port)) else { return nil }
-        let conn = NWConnection(host: NWEndpoint.Host(host), port: p, usage: .message)
+    public static func latency(to host: String, port: Int, timeout: Double = 4) -> Double? {
         let t0 = Date()
-        do {
-            try await conn.connect(timeout: .seconds(Int(timeout)))
-            let ms = Date().timeIntervalSince(t0) * 1000
-            conn.cancel()
-            return ms
-        } catch {
-            conn.cancel()
-            return nil
-        }
+        var h = addrinfo()
+        h.ai_family = AF_INET
+        h.ai_socktype = SOCK_STREAM
+        var res: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, String(port), &h, &res) == 0, let r = res else { return nil }
+        defer { freeaddrinfo(r) }
+        let fd = socket(r.pointee.ai_family, r.pointee.ai_socktype, r.pointee.ai_protocol)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        fcntl(fd, F_SETFL, O_NONBLOCK)
+        guard connect(fd, r.pointee.ai_addr, r.pointee.ai_addrlen) == 0 || errno == EINPROGRESS else { return nil }
+        var tv = timeval(tv_sec: Int(timeout), tv_usec: 0)
+        var wfds = fdset()   // 全零 = 无 fd
+        if fd < 32 { wfds.fds_bits.0 = Int32(1 << fd) }
+        let rc = select(fd + 1, nil, &wfds, nil, &tv)
+        guard rc >= 1 else { return nil }
+        var err: Int32 = 0
+        var elen = socklen_t(MemoryLayout<Int32>.size)
+        getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &elen)
+        guard err == 0 else { return nil }
+        return Date().timeIntervalSince(t0) * 1000
     }
 }
 

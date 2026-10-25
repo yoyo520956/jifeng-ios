@@ -146,7 +146,7 @@ final class JifengTunnel: NEPacketTunnelProvider {
     private func locateXray() -> URL? {
         let bundle = Bundle(for: type(of: self))
         let fm = FileManager.default
-        if let u = bundle.bundleURL?.appendingPathComponent("xray"),
+        if let u = bundle.bundleURL.appendingPathComponent("xray"),
            fm.isExecutableFile(atPath: u.path) {
             return u
         }
@@ -154,7 +154,7 @@ final class JifengTunnel: NEPacketTunnelProvider {
            fm.isExecutableFile(atPath: u.path) {
             return u
         }
-        if let u = Bundle.main.bundleURL?.appendingPathComponent("PlugIns/Jifeng.appex/xray"),
+        if let u = Bundle.main.bundleURL.appendingPathComponent("PlugIns/Jifeng.appex/xray"),
            fm.isExecutableFile(atPath: u.path) {
             return u
         }

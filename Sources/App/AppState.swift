@@ -151,7 +151,7 @@ final class AppState: ObservableObject {
         // 延迟：TCP 握手探测（主 App 直连节点 host:port，不经过隧道）
         if let node = currentNode {
             Task { [weak self] in
-                let ms = await LatencyProbe.latency(to: node.host, port: node.port)
+                let ms = LatencyProbe.latency(to: node.host, port: node.port)
                 guard let self else { return }
                 self.latencyMs = ms
                 if let ms {
@@ -204,7 +204,7 @@ final class AppState: ObservableObject {
     func testNode(_ n: ProxyNode) {
         toast = "正在测试 \(n.name)…"
         Task { [weak self] in
-            let ms = await LatencyProbe.latency(to: n.host, port: n.port)
+            let ms = LatencyProbe.latency(to: n.host, port: n.port)
             guard let self else { return }
             if let ms {
                 self.nodeLatency[n.id] = ms
