@@ -43,13 +43,13 @@ jobs:
           cp xray-dl/xray Resources/xray/xray
           chmod +x Resources/xray/xray
           set -e
-          if xcrun vtool -set-platform-version ios 15.0 0 -replace Resources/xray/xray 2>/dev/null; then echo vtool-replace-ok
-          elif xcrun vtool -set-platform-version iOS 15.0 0 -replace Resources/xray/xray 2>/dev/null; then echo vtool-replace-ok2
+          if xcrun vtool -set-build-version ios 15.0 0 -replace Resources/xray/xray 2>/dev/null; then echo vtool-ok
+          elif xcrun vtool -set-build-version IOS 15.0 0 -replace Resources/xray/xray 2>/dev/null; then echo vtool-ok2
           else
-            xcrun vtool -set-platform-version ios 15.0 0 -output Resources/xray/xray.new Resources/xray/xray
+            xcrun vtool -set-version-min ios 15.0 0 -output Resources/xray/xray.new Resources/xray/xray
             mv Resources/xray/xray.new Resources/xray/xray
           fi
-          xcrun vtool -show Resources/xray/xray || true
+          xcrun vtool -show-build Resources/xray/xray || true
           codesign --force --sign - Resources/xray/xray
           file Resources/xray/xray
 
