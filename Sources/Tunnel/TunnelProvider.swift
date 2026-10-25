@@ -25,7 +25,6 @@ final class JifengTunnel: NEPacketTunnelProvider {
 
     // MARK: - 启动（legacy completion 版签名，iOS 14+）
     override func startTunnel(options: [String: NSObject]?, completion: @escaping (Error?) -> Void) {
-        super.setTunnelMTU(1400)
         guard let nodeJSON = options?["node"] as? String,
               let node = NodeCodex.decode(nodeJSON)
         else {
@@ -86,7 +85,7 @@ final class JifengTunnel: NEPacketTunnelProvider {
         }
     }
 
-    override func readTunnelData(count: Int, completion: @escaping (Data?, Error?) -> Void) {
+    override func readTunnelData(_ count: Int, completion: @escaping (Data?, Error?) -> Void) {
         guard udpFD >= 0 else {
             completion(nil, JifengError.socketFail)
             return
@@ -138,7 +137,7 @@ final class JifengTunnel: NEPacketTunnelProvider {
 
     /// iOS 无 Process/NSTask，用 posix_spawn 拉起 xray
     private func spawnXray(bin: URL, config: String, log: String) -> pid_t? {
-        let logFD = open(log, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+        let logFD = log.withCString { open($0, O_WRONLY | O_CREAT | O_APPEND, mode_t(0o644)) }
         var actions = posix_spawn_file_actions_t()
         posix_spawn_file_actions_init(&actions)
         if logFD >= 0 {
